@@ -1,5 +1,6 @@
 langchain
 langgraph
-langchain-google-genai
+langchain-groq
 python-dotenv
 ruff
+langsmith
