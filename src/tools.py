@@ -1,6 +1,6 @@
 import requests
 from langchain.tools import tool
-from schemas import ReconResult
+from src.schemas import ReconResult
 
 
 target = "http://localhost:7002/v1/chat/completions"

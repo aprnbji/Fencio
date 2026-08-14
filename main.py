@@ -5,7 +5,7 @@ from langchain.agents import create_agent
 from langchain_groq import ChatGroq
 from langgraph.checkpoint.memory import InMemorySaver
 
-from tools import query_target_llm, recon_target
+from src.tools import query_target_llm, recon_target
 
 load_dotenv()
 api_key = os.getenv("GROQ_API_KEY")
