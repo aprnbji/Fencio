@@ -1,13 +1,27 @@
-from pydantic import BaseModel 
+from pydantic import BaseModel, Field
+
+
+class ReconItem(BaseModel):
+    query: str
+    response: str
+
 
 class ReconResult(BaseModel):
-    capabilities: str = ""
-    tools: str = ""
-    restrictions: str = ""
-    external_access: str = ""
-    system_prompt: str = ""
-    knowledge: str = ""
-    purpose: str = ""
-    data_access: str = ""
-    code_execution: str = ""
-    file_operations: str = ""
+    items: list[ReconItem] = Field(default_factory=list)
+
+
+class Evidence(BaseModel):
+    query: str
+    response: str
+
+
+class AttackSurface(BaseModel):
+    surface: str
+    evidence: Evidence
+    vector: str
+    risk: str
+
+
+class VulnerabilityReport(BaseModel):
+    summary: str
+    attack_surfaces: list[AttackSurface] = Field(default_factory=list)
