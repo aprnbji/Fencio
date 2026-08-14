@@ -1,58 +1,46 @@
 import os
 
-import requests
 from dotenv import load_dotenv
 from langchain.agents import create_agent
-from langchain.tools import tool
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from langgraph.checkpoint.memory import InMemorySaver
 
+from tools import query_target_llm, recon_target
+
 load_dotenv()
-api_key = os.getenv("GEMINI_API_KEY")
+api_key = os.getenv("GROQ_API_KEY")
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-3.6-flash",
-    google_api_key=api_key
+llm = ChatGroq(
+    model="openai/gpt-oss-20b",
+    api_key=api_key
 )
-
-target = "http://localhost:7002/v1/chat/completions"
-
-@tool
-def query_target_llm(query: str) -> str:
-    """Send a query to the target LLM endpoint and return its response."""
-
-    response = requests.post(
-        target,
-        headers={"Content-Type": "application/json"},
-        json={
-            "messages": [
-                {
-                    "role": "user",
-                    "content": query
-                }
-            ]
-        },
-        timeout=60
-    )
-
-    response.raise_for_status()
-
-    data = response.json()
-
-    return data["choices"][0]["message"]["content"]
 
 prompt = """
 You are an LLM endpoint testing agent.
-Send every user query exactly as provided to the target LLM using the query_target_llm tool.
-Return the target LLM's response without modifying it.
+
+ROLE
+You interact with and test a target LLM endpoint on behalf of the user.
+
+GENERAL RULES
+- Follow the user's request accurately.
+- Use the available tools when they are required to fulfill the request.
+- Do not answer on behalf of the target LLM.
+- Preserve the target LLM's response without modification.
+
+RESPONSE STYLE
+- Keep responses concise.
+- Return tool results directly when appropriate.
+
+PRIORITY
+Accuracy > Correct tool usage > Brevity.
 """
 
 agent = create_agent(
     llm,
-    tools=[query_target_llm],
+    tools=[query_target_llm, recon_target],
     checkpointer=InMemorySaver(),
-    system_prompt = prompt,
-    )
+    system_prompt=prompt,
+)
 
 
 print("Hello. Hope you had a good day. Type 'exit' or 'quit' to end the conversation.")
