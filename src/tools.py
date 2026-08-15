@@ -1,11 +1,15 @@
+import os
 import time
 
 import requests
+from dotenv import load_dotenv
 from langchain.tools import tool
 
 from src.schemas import ReconItem, ReconResult
 
-target = "http://localhost:7016/v1/chat/completions"
+load_dotenv()
+
+target = os.getenv("TARGET_URL")
 
 
 def send_query(query: str) -> str:
