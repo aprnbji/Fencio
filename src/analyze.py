@@ -1,20 +1,22 @@
 import json
-import os
+import re
 from pathlib import Path
 
-from dotenv import load_dotenv
-from langchain.agents import create_agent
-from langchain_groq import ChatGroq
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import PydanticOutputParser
+from langchain_openai import ChatOpenAI
 
 from src.schemas import VulnerabilityReport
 
-load_dotenv()
 
-
-llm = ChatGroq(
-    model="openai/gpt-oss-20b",
-    api_key=os.getenv("GROQ_API_KEY"),
+llm = ChatOpenAI(
+    base_url="http://127.0.0.1:4010/v1/",
+    api_key="local",
+    model="big-pickle",
+    temperature=0.2,
+    timeout=None,
+    max_retries=2,
+    max_tokens=2048,
 )
 
 analyze_prompt = """
@@ -49,18 +51,48 @@ return a report with an empty attack_surfaces list and a summary noting that
 no significant attack surfaces were identified.
 """
 
+parser = PydanticOutputParser(pydantic_object=VulnerabilityReport)
 
-analyzer = create_agent(
-    llm,
-    system_prompt=analyze_prompt,
-    response_format=VulnerabilityReport,
-)
+
+def extract_json(text: str) -> dict | None:
+    candidates = [
+        text.strip(),
+        text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip(),
+    ]
+    fence = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if fence:
+        candidates.append(fence.group(1))
+
+    brace = text.find("{")
+    end = text.rfind("}")
+    if brace != -1 and end != -1 and end > brace:
+        candidates.append(text[brace : end + 1])
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def parse_report(content: str) -> VulnerabilityReport:
+    try:
+        return parser.parse(content)
+    except Exception as parse_error:
+        parsed = extract_json(content)
+        if parsed is not None:
+            return VulnerabilityReport.model_validate(parsed)
+        raise parse_error
 
 
 def analyze_node(state: dict) -> dict:
     print("[analyze] starting analysis...")
 
     recon = state["recon_data"]
+    payload = recon.model_dump_json(indent=2)
 
     max_attempts = 3
     report = None
@@ -68,15 +100,19 @@ def analyze_node(state: dict) -> dict:
 
     for attempt in range(max_attempts):
         try:
-            response = analyzer.invoke(
-                {
-                    "messages": [
-                        HumanMessage(content=recon.model_dump_json(indent=2)),
-                    ]
-                }
+            response = llm.invoke(
+                [
+                    SystemMessage(content=analyze_prompt),
+                    HumanMessage(content=payload + "\n\n" + parser.get_format_instructions()),
+                ]
             )
-
-            report = response["structured_response"]
+            content = response.content
+            if isinstance(content, list):
+                content = "".join(
+                    part.get("text", "") if isinstance(part, dict) else str(part)
+                    for part in content
+                )
+            report = parse_report(content or "")
             break
 
         except Exception as exc:
@@ -84,20 +120,17 @@ def analyze_node(state: dict) -> dict:
             print(f"[analyze] attempt {attempt + 1}/{max_attempts} failed: {exc}")
 
     if report is None:
-        raise RuntimeError(
-            f"[analyze] all {max_attempts} attempts failed. Last error: {last_error}"
+        print(f"[analyze] all {max_attempts} attempts failed: {last_error}")
+        report = VulnerabilityReport(
+            summary=(
+                "Automatic analysis failed; no attack surfaces could be "
+                f"derived from recon data. Last error: {last_error}"
+            )
         )
 
     path = Path("reports") / "vuln_analysis" / f"{state['session_id']}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    path.write_text(
-        json.dumps(
-            report.model_dump(),
-            indent=2,
-            ensure_ascii=False,
-        )
-    )
+    path.write_text(json.dumps(report.model_dump(), indent=2, ensure_ascii=False))
 
     print(f"[analyze] saved to {path}")
     print("[analyze] done")
