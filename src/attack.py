@@ -39,13 +39,13 @@ load_dotenv()
 # ── LLMs ─────────────────────────────────────────────────────────────────────
 
 attacker_llm = ChatGroq(
-    model="llama-3.3-70b-versatile",
+    model="openai/gpt-oss-20b",
     api_key=os.getenv("GROQ_API_KEY"),
     temperature=0.9,
 )
 
 judge_llm = ChatGroq(
-    model="llama-3.3-70b-versatile",
+    model="openai/gpt-oss-20b",
     api_key=os.getenv("GROQ_API_KEY"),
     temperature=0.2,
 )
@@ -220,7 +220,7 @@ def strategist_node(state: AttackState) -> AttackState:
     attempts = list(entry.get("attempts", []))
 
     score = state.get("judge_score", 0)
-    confirmed = state.get("judge_confirmed", False) or score >= cls["confirm_threshold"]
+    confirmed = state.get("judge_confirmed", False) and score >= cls["confirm_threshold"]
 
     attempt = {
         "round": len(attempts) + 1,
