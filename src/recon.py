@@ -22,7 +22,7 @@ def recon_node(state: dict) -> dict:
 
     print("[recon] done")
 
-    path = Path("reports") / f"recon_{state['session_id']}.json"
+    path = Path("reports") / "recon" / f"{state['session_id']}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
 
     path.write_text(

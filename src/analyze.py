@@ -88,7 +88,7 @@ def analyze_node(state: dict) -> dict:
             f"[analyze] all {max_attempts} attempts failed. Last error: {last_error}"
         )
 
-    path = Path("reports") / f"vulnerability_report_{state['session_id']}.json"
+    path = Path("reports") / "vuln_analysis" / f"{state['session_id']}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
 
     path.write_text(

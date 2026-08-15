@@ -5,7 +5,7 @@ from langchain.tools import tool
 
 from src.schemas import ReconItem, ReconResult
 
-target = "https://inference.biscuitbobby.eu.org/v1/chat/completions"
+target = "http://localhost:7002/v1/chat/completions"
 
 
 def send_query(query: str) -> str:
@@ -28,7 +28,8 @@ def send_query(query: str) -> str:
 
             response.raise_for_status()
 
-            return response.json()["choices"][0]["message"]["content"]
+            content = response.json()["choices"][0]["message"]["content"]
+            return content if content is not None else ""
 
         except (requests.exceptions.RequestException, KeyError, IndexError, ValueError) as exc:
             print(f"[target] attempt {attempt + 1}/{max_attempts} failed: {exc}")

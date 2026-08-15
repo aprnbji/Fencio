@@ -25,3 +25,19 @@ class AttackSurface(BaseModel):
 class VulnerabilityReport(BaseModel):
     summary: str
     attack_surfaces: list[AttackSurface] = Field(default_factory=list)
+
+
+class JudgeVerdict(BaseModel):
+    score: int
+    confirmed: bool
+    evidence: str
+    feedback: str
+
+
+class AttackFinding(BaseModel):
+    vulnerability: str
+    severity: str
+    evidence: str
+    feedback: str
+    impact: str
+    remediation: str
