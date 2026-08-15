@@ -35,9 +35,11 @@ class JudgeVerdict(BaseModel):
 
 
 class AttackFinding(BaseModel):
+    session_id: str
     vulnerability: str
     severity: str
-    evidence: str
-    feedback: str
+    description: str
+    evidence: Evidence
     impact: str
     remediation: str
+    best_score: int

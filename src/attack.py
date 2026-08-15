@@ -31,6 +31,7 @@ from langgraph.graph import END, START, StateGraph
 
 from src.tests import TEST_CLASSES
 from src.tools import send_query
+from src.schemas import JudgeVerdict, AttackFinding
 
 load_dotenv()
 
@@ -174,11 +175,11 @@ def judge_node(state: AttackState) -> AttackState:
     )
 
     try:
-        r = _extract_json(raw)
-        score = int(r["score"])
-        confirmed = str(r.get("confirmed", "")).strip().lower() in ("true", "1", "yes")
-        evidence = str(r.get("evidence", ""))
-        feedback = str(r.get("feedback", ""))
+        verdict = JudgeVerdict.model_validate(_extract_json(raw))
+        score = verdict.score
+        confirmed = verdict.confirmed
+        evidence = verdict.evidence
+        feedback = verdict.feedback
     except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
         print(f"  [judge] parse failed: {exc}; raw={raw[:200]!r}")
         score, confirmed, evidence, feedback = 0, False, "", "parse error"
@@ -217,19 +218,16 @@ def strategist_node(state: AttackState) -> AttackState:
     if confirmed:
         entry["status"] = "confirmed"
         findings.append(
-            {
-                "session_id": state.get("session_id", ""),
-                "vulnerability": cls["name"],
-                "severity": _bump_severity(cls["base_severity"], score),
-                "description": cls["description"],
-                "evidence": {
-                    "query": attempt["prompt"],
-                    "response": attempt["response"] or attempt["evidence"] or "",
-                },
-                "impact": cls["impact"],
-                "remediation": cls["remediation"],
-                "best_score": score,
-            }
+            AttackFinding(
+                session_id=state.get("session_id", ""),
+                vulnerability=cls["name"],
+                severity=_bump_severity(cls["base_severity"], score),
+                description=cls["description"],
+                evidence={"query": attempt["prompt"], "response": attempt["response"] or attempt["evidence"] or ""},
+                impact=cls["impact"],
+                remediation=cls["remediation"],
+                best_score=score,
+            ).model_dump()
         )
         print(f"  [strategist] CONFIRMED {cls['id']} (score={score})")
     elif attempt["round"] >= (entry.get("max_attempts") or cls["max_attempts"]):
