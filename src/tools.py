@@ -5,7 +5,7 @@ from langchain.tools import tool
 
 from src.schemas import ReconItem, ReconResult
 
-target = "http://localhost:7002/v1/chat/completions"
+target = "http://localhost:7016/v1/chat/completions"
 
 
 def send_query(query: str) -> str:

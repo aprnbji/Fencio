@@ -39,7 +39,9 @@ class AttackFinding(BaseModel):
     vulnerability: str
     severity: str
     description: str
+    methodology: str
     evidence: Evidence
+    reproduction: str
     impact: str
     remediation: str
     best_score: int
