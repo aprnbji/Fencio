@@ -1,5 +1,7 @@
 # Autonomous Red Teaming Agent
 
+https://github.com/user-attachments/assets/d028ccec-501f-450c-9abe-2b218276fdf7
+
 An autonomous security assessment framework built with LangGraph to test AI agents for vulnerabilities including prompt injections, system prompt extraction, indirect prompt injections, tool abuse, and credential leaks.
 
 It uses an adaptive offensive LLM loop to execute iterative attack strategies, analyze target behaviors, and generate structured vulnerability reports.
