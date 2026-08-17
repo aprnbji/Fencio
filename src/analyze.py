@@ -1,22 +1,25 @@
 import json
+import os
 import re
 from pathlib import Path
 
+from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 
 from src.schemas import VulnerabilityReport
+from src.tests import TEST_CLASSES
 
+load_dotenv()
 
-llm = ChatOpenAI(
-    base_url="http://127.0.0.1:4010/v1/",
-    api_key="local",
-    model="big-pickle",
-    temperature=0.2,
+analyzer_llm = ChatGroq(
+    model="openai/gpt-oss-20b",
+    api_key=os.getenv("GROQ_API_KEY"),
+    temperature=0.9,
     timeout=None,
     max_retries=2,
-    max_tokens=2048,
+    max_tokens=1024,
 )
 
 analyze_prompt = """
@@ -78,18 +81,70 @@ def extract_json(text: str) -> dict | None:
     return None
 
 
+def order_classes(report: VulnerabilityReport) -> list[dict]:
+    """Reorder TEST_CLASSES by relevance to the analysis report.
+
+    For each attack surface the analyser identified, find the best-matching
+    test class (by comparing surface/vector text against class name/category/
+    description) and inject the analyser's vector text so probe_node can use
+    it as extra context. Matched classes come first, ordered by how early they
+    appear in the report's attack_surfaces list; unmatched classes follow in
+    their original order.
+    """
+    surfaces = report.attack_surfaces or []
+
+    def score_match(cls: dict, surface_text: str, vector_text: str) -> int:
+        haystack = " ".join([
+            cls.get("name", ""),
+            cls.get("category", ""),
+            cls.get("description", ""),
+            cls.get("id", ""),
+        ]).lower()
+        needle = (surface_text + " " + vector_text).lower()
+        # Count how many words from the needle appear in the haystack
+        return sum(1 for word in needle.split() if len(word) > 3 and word in haystack)
+
+    matched_ids: dict[str, str] = {}  # class_id -> vector text
+    match_order: dict[str, int] = {}  # class_id -> position in surfaces list
+
+    for pos, surface in enumerate(surfaces):
+        best_cls = max(
+            TEST_CLASSES,
+            key=lambda c: score_match(c, surface.surface, surface.vector),
+        )
+        best_score = score_match(best_cls, surface.surface, surface.vector)
+        if best_score > 0 and best_cls["id"] not in matched_ids:
+            matched_ids[best_cls["id"]] = surface.vector
+            match_order[best_cls["id"]] = pos
+
+    matched = sorted(
+        [cls for cls in TEST_CLASSES if cls["id"] in matched_ids],
+        key=lambda c: match_order[c["id"]],
+    )
+    unmatched = [cls for cls in TEST_CLASSES if cls["id"] not in matched_ids]
+
+    ordered = []
+    for cls in matched + unmatched:
+        entry = dict(cls)
+        if cls["id"] in matched_ids:
+            entry["recon_vector"] = matched_ids[cls["id"]]
+        ordered.append(entry)
+
+    return ordered
+
+
 def parse_report(content: str) -> VulnerabilityReport:
     try:
         return parser.parse(content)
-    except Exception as parse_error:
+    except Exception:
         parsed = extract_json(content)
         if parsed is not None:
             return VulnerabilityReport.model_validate(parsed)
-        raise parse_error
+        raise
 
 
 def analyze_node(state: dict) -> dict:
-    print("[analyze] starting analysis...")
+    print("[+] Analyzing attack surface...")
 
     recon = state["recon_data"]
     payload = recon.model_dump_json(indent=2)
@@ -100,7 +155,7 @@ def analyze_node(state: dict) -> dict:
 
     for attempt in range(max_attempts):
         try:
-            response = llm.invoke(
+            response = analyzer_llm.invoke(
                 [
                     SystemMessage(content=analyze_prompt),
                     HumanMessage(content=payload + "\n\n" + parser.get_format_instructions()),
@@ -115,12 +170,12 @@ def analyze_node(state: dict) -> dict:
             report = parse_report(content or "")
             break
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             last_error = exc
-            print(f"[analyze] attempt {attempt + 1}/{max_attempts} failed: {exc}")
+            print(f"    Analysis attempt {attempt + 1}/{max_attempts} failed: {exc}")
 
     if report is None:
-        print(f"[analyze] all {max_attempts} attempts failed: {last_error}")
+        print(f"    All {max_attempts} attempts failed: {last_error}")
         report = VulnerabilityReport(
             summary=(
                 "Automatic analysis failed; no attack surfaces could be "
@@ -132,7 +187,13 @@ def analyze_node(state: dict) -> dict:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report.model_dump(), indent=2, ensure_ascii=False))
 
-    print(f"[analyze] saved to {path}")
-    print("[analyze] done")
+    surfaces = [s.surface for s in report.attack_surfaces] if report.attack_surfaces else []
+    if surfaces:
+        print("    Attack Surface:")
+        for s in surfaces:
+            print(f"      {s}")
+    else:
+        print("    No significant attack surfaces identified")
 
-    return {"analysis": report}
+    ordered_classes = order_classes(report)
+    return {"analysis": report, "ordered_classes": ordered_classes}

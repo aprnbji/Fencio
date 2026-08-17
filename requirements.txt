@@ -5,3 +5,4 @@ python-dotenv
 ruff
 langsmith
 pandas
+requests

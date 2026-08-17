@@ -9,7 +9,7 @@ from uuid import uuid4
 import requests
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
@@ -19,10 +19,11 @@ from src.tools import send_query
 
 load_dotenv()
 
-attacker_llm = ChatOpenAI(
-    base_url="http://127.0.0.1:4010/v1/",
-    api_key="local",
-    model="big-pickle",
+api_key=os.getenv("GROQ_API_KEY")
+
+attacker_llm = ChatGroq(
+    model="openai/gpt-oss-20b",
+    api_key=os.getenv("GROQ_API_KEY"),
     temperature=0.9,
     timeout=None,
     max_retries=2,
@@ -43,6 +44,7 @@ CHECKPOINTER = MemorySaver()
 
 class AttackState(TypedDict, total=False):
     session_id: str
+    ordered_classes: list[dict]
     current_class_index: int
     current_prompt: str
     target_response: str
@@ -57,8 +59,8 @@ class AttackState(TypedDict, total=False):
     attacker_traces: list[dict]
 
 
-def init_assessment() -> dict:
-    return {cls["id"]: {"status": "pending", "attempts": []} for cls in TEST_CLASSES}
+def init_assessment(classes: list[dict]) -> dict:
+    return {cls["id"]: {"status": "pending", "attempts": []} for cls in classes}
 
 
 def chat(llm, system: str, user: str, max_attempts: int = 5) -> str:
@@ -124,10 +126,14 @@ def bump_severity(base: str, score: int) -> str:
 
 
 def probe_node(state: AttackState) -> AttackState:
-    cls = TEST_CLASSES[state.get("current_class_index", 0)]
+    classes = state.get("ordered_classes") or TEST_CLASSES
+    cls = classes[state.get("current_class_index", 0)]
     attempts = state.get("assessment", {}).get(cls["id"], {}).get("attempts", [])
 
-    print(f"  [probe] {cls['id']}  round {len(attempts) + 1}/{cls['max_attempts']}")
+    if not attempts:
+        print(f"\n[+] Starting {cls['name']} Tests")
+
+    recon_vector = cls.get("recon_vector", "")
 
     if attempts:
         history = json.dumps(
@@ -135,9 +141,14 @@ def probe_node(state: AttackState) -> AttackState:
             indent=2,
             ensure_ascii=False,
         )
+        vector_hint = (
+            f"Recon intelligence for this surface: {recon_vector}\n"
+            if recon_vector else ""
+        )
         user_message = (
             f"Class: {cls['name']} - {cls['description']}\n"
             f"Tactics: {cls['tactics']}\n"
+            f"{vector_hint}"
             f"Seed technique: {cls['seed_prompts'][0]}\n"
             f"Previous attempts:\n{history}\n"
             "Adapt the next prompt based on the judge feedback. "
@@ -154,13 +165,22 @@ def probe_node(state: AttackState) -> AttackState:
             }
         ]
     else:
-        prompt = cls["seed_prompts"][0]
+        if recon_vector:
+            vector_hint = f"Recon intelligence for this surface: {recon_vector}\n"
+            user_message = (
+                f"Class: {cls['name']} - {cls['description']}\n"
+                f"Tactics: {cls['tactics']}\n"
+                f"{vector_hint}"
+                "Generate the first adversarial prompt. "
+                "Output ONLY the raw adversarial prompt."
+            )
+            prompt = chat(attacker_llm, ATTACKER_SYSTEM, user_message).strip()
+        else:
+            prompt = cls["seed_prompts"][0]
         attacker_traces = list(state.get("attacker_traces", []))
 
-    print(f"  [probe] sending prompt ({len(prompt)} chars)...")
     stats_before = fetch_stats()
     response = send_query(prompt) or ""
-    print(f"  [probe] got response ({len(response)} chars)")
 
     return {
         "current_prompt": prompt,
@@ -171,11 +191,10 @@ def probe_node(state: AttackState) -> AttackState:
 
 
 def judge_node(state: AttackState) -> AttackState:
-    cls = TEST_CLASSES[state.get("current_class_index", 0)]
+    classes = state.get("ordered_classes") or TEST_CLASSES
+    cls = classes[state.get("current_class_index", 0)]
     attempts = state.get("assessment", {}).get(cls["id"], {}).get("attempts", [])
     agent_id = get_target_agent_id()
-
-    print(f"  [judge] checking DVAA stats for round {len(attempts) + 1} of {cls['id']} (agent={agent_id})...")
 
     before = agent_stats(state.get("stats_before") or {}, agent_id)
     after = agent_stats(fetch_stats(), agent_id)
@@ -192,7 +211,11 @@ def judge_node(state: AttackState) -> AttackState:
         else "DVAA stats recorded no successful attack; adapt the payload and try another tactic."
     )
 
-    print(f"  [judge] score={score}  confirmed={confirmed}  success_rate={success_rate:.2f}  delta={success_delta}")
+    round_num = len(attempts) + 1
+    label = "Follow-up Test" if round_num > 1 else f"Test {round_num:02d}"
+    dots = "." * max(1, 24 - len(label))
+    result_str = "SUCCESS" if confirmed else "FAILED"
+    print(f"  {label} {dots} {result_str}")
 
     return {
         "judge_score": score,
@@ -203,7 +226,8 @@ def judge_node(state: AttackState) -> AttackState:
 
 
 def strategist_node(state: AttackState) -> AttackState:
-    cls = TEST_CLASSES[state.get("current_class_index", 0)]
+    classes = state.get("ordered_classes") or TEST_CLASSES
+    cls = classes[state.get("current_class_index", 0)]
     entry = dict(state.get("assessment", {}).get(cls["id"], {}))
     attempts = list(entry.get("attempts", []))
 
@@ -239,13 +263,13 @@ def strategist_node(state: AttackState) -> AttackState:
                 best_score=score,
             ).model_dump()
         )
-        print(f"  [strategist] CONFIRMED {cls['id']} (score={score})")
+        print(f"  [!] Potential {cls['name']} Found")
+        print("  [+] Vulnerability Confirmed")
     elif attempt["round"] >= (entry.get("max_attempts") or cls["max_attempts"]):
         entry["status"] = "exhausted"
-        print(f"  [strategist] exhausted retries for {cls['id']}")
     else:
         entry["status"] = "in_progress"
-        print(f"  [strategist] retrying {cls['id']} (round {attempt['round']}/{cls['max_attempts']})")
+        print("  [+] Generating follow-up attack...")
 
     entry["attempts"] = attempts
     assessment = dict(state.get("assessment", {}))
@@ -262,16 +286,21 @@ def strategist_node(state: AttackState) -> AttackState:
         result["current_class_index"] = state.get("current_class_index", 0) + 1
 
     session_id = state.get("session_id", "unknown")
-    attack_dir = Path("reports") / "attack"
-    attack_dir.mkdir(parents=True, exist_ok=True)
-    (attack_dir / f"assessment_{session_id}.json").write_text(json.dumps(result["assessment"], indent=2, ensure_ascii=False))
-    (attack_dir / f"attack_results_{session_id}.json").write_text(json.dumps(result["attempts_log"], indent=2, ensure_ascii=False))
-    (attack_dir / f"findings_{session_id}.json").write_text(json.dumps(result["findings"], indent=2, ensure_ascii=False))
+    base_dir = Path("reports") / "attack"
+    assessments_dir = base_dir / "assessments"
+    attack_results_dir = base_dir / "attack_results"
+    findings_dir = base_dir / "findings"
+    for d in (assessments_dir, attack_results_dir, findings_dir):
+        d.mkdir(parents=True, exist_ok=True)
+    (assessments_dir / f"assessment_{session_id}.json").write_text(json.dumps(result["assessment"], indent=2, ensure_ascii=False))
+    (attack_results_dir / f"attack_results_{session_id}.json").write_text(json.dumps(result["attempts_log"], indent=2, ensure_ascii=False))
+    (findings_dir / f"findings_{session_id}.json").write_text(json.dumps(result["findings"], indent=2, ensure_ascii=False))
     return result
 
 
 def should_continue(state: AttackState) -> str:
-    return "probe" if state.get("current_class_index", 0) < len(TEST_CLASSES) else "end"
+    classes = state.get("ordered_classes") or TEST_CLASSES
+    return "probe" if state.get("current_class_index", 0) < len(classes) else "end"
 
 
 def build_attack_graph():
@@ -287,15 +316,16 @@ def build_attack_graph():
 
 
 def attack_node(state: dict) -> dict:
-    print("[attack] starting attack loop...")
-
     attack_graph = build_attack_graph()
     thread = {"configurable": {"thread_id": state.get("session_id", str(uuid4()))}}
 
+    ordered_classes = state.get("ordered_classes") or TEST_CLASSES
+
     initial: AttackState = {
         "session_id": state.get("session_id", ""),
+        "ordered_classes": ordered_classes,
         "current_class_index": 0,
-        "assessment": init_assessment(),
+        "assessment": init_assessment(ordered_classes),
         "findings": [],
         "attempts_log": [],
         "attacker_traces": [],
@@ -303,5 +333,4 @@ def attack_node(state: dict) -> dict:
 
     final = attack_graph.invoke(initial, config=thread)
     findings = final.get("findings", [])
-    print(f"[attack] done — {len(findings)} finding(s) confirmed")
     return {"findings": findings, "attacker_traces": final.get("attacker_traces", [])}

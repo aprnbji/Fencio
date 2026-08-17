@@ -21,7 +21,7 @@ load_dotenv()
 OUTPUT_FILE = Path("reports/distilled_dataset.jsonl")
 LANGSMITH_DATASET = "Attacker Traces Dataset"
 TARGET_MODEL = os.getenv("TARGET_MODEL", "")
-PROJECT_NAME = os.getenv("LANGSMITH_PROJECT", "fencio-attacker")
+PROJECT_NAME = os.getenv("LANGSMITH_PROJECT")
 
 
 def push_to_langsmith(traces: list[dict]) -> None:
@@ -73,20 +73,14 @@ def distill_node(state: dict) -> dict:
     traces = state.get("attacker_traces", [])
 
     if not traces:
-        print("[distill] no attacker traces to save")
         return {"distill_count": 0}
 
-    # Always write locally
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     with OUTPUT_FILE.open("a") as f:
         for trace in traces:
             f.write(json.dumps(trace, ensure_ascii=False) + "\n")
 
-    print(f"[distill] {len(traces)} examples appended to {OUTPUT_FILE}")
-
     if os.getenv("LANGSMITH_API_KEY"):
         push_to_langsmith(traces)
-    else:
-        print("[distill] LANGSMITH_API_KEY not set, skipping LangSmith upload")
 
     return {"distill_count": len(traces)}
